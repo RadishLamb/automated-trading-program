@@ -1,0 +1,256 @@
+# FOR A GENERAL EXPLANATION OF REQUIREMENTS ON getOrders see rsi_contrarian.R 
+
+# Marketmaking strategy
+# Places buy and sell limit orders around close price
+# Spread is determined by daily range
+# Unit position sizes for limit orders
+# Uses market order to clear inventory when it becomes too large
+
+# Note: limit orders are automatically cancelled at the end of the day
+maxRows <- 3100
+getOrders <- function(store, newRowList, currentPos, params) {
+
+    #cat("currentPos", formatC(currentPos,3),"\n")
+
+    # check if current inventory is above a limit and if so exit completely
+    # with a market order
+    allzero  <- rep(0,length(newRowList))
+    marketOrders <- ifelse(abs(currentPos) > params$inventoryLimits, -currentPos, 0)
+    pos1 <- allzero
+    # use the range (High-Low) as a indicator for a reasonable "spread" for
+    # this pseudo market making strategy
+    spread <- sapply(1:length(newRowList),function(i)
+                     params$spreadPercentage * (newRowList[[i]]$High -
+                                                   newRowList[[i]]$Low))
+    
+    if (is.null(store)) store <- initStore(newRowList,params$series)
+    order1<-rep(0,length(params$series))
+    order2<-rep(0,length(params$series))
+    ppos<-rep(0,length(params$series))
+    entryAndExit1<-rep(0,length(params$series))
+    ppos1<-rep(0,length(params$series))
+    ppos2<-rep(0,length(params$series))
+    possizes<-rep(0,length(params$series))
+    
+    if (store$iter > 55) {
+      
+      for (i in 1:length(params$series)) {
+        if (i==2||i==10){
+          order1[params$series[i]]<-lgStFtlimitorder(store$cl,store$high,store$low,store$index,params$series[i],store$iter,store$ppooss,store$entryiter)[1]
+          order2[params$series[i]]<-lgStFtlimitorder(store$cl,store$high,store$low,store$index,params$series[i],store$iter,store$ppooss,store$entryiter)[2]
+          ppos1[params$series[i]]<-lgStFtlimitorder(store$cl,store$high,store$low,store$index,params$series[i],store$iter,store$ppooss,store$entryiter)[4]
+        
+          entryAndExit1[params$series[i]]<-lgStFtlimitorder(store$cl,store$high,store$low,store$index,params$series[i],store$iter,store$ppooss,store$entryiter)[3]
+        }
+        if (i==4||i==6||i==9){
+          ppos2[params$series[i]]<-lgStFtrsi(store$cl,params$series[i],store$iter)
+          possizes[params$series[i]]<-calculatePosSizes(store$cl,store$high,store$low,params$series[i],store$iter)
+          pos1[params$series[i]] <- ppos2[params$series[i]]*possizes[params$series[i]]
+        }
+        
+      }
+      
+      
+    }
+    ppos<-ppos1+ppos2
+#   print(ppos)
+#    print("-")
+#    print(store$iter)
+#    print(entryAndExit1)
+    store <- updateStore(store, newRowList, params$series,ppos1,entryAndExit1)
+    
+    marketOrders <- marketOrders + pos1
+    
+    limitOrders1  <- order1 # BUY LIMIT ORDERS
+    limitPrices1  <- sapply(1:length(newRowList),function(i) 
+                                        newRowList[[i]]$Close - spread[i]/3)
+
+    limitOrders2  <- order2 # SELL LIMIT ORDERS
+    limitPrices2  <- sapply(1:length(newRowList),function(i) 
+                                        newRowList[[i]]$Close + spread[i]/3)
+
+	return(list(store=store,marketOrders=marketOrders,
+	                        limitOrders1=limitOrders1,
+	                        limitPrices1=limitPrices1,
+	                        limitOrders2=limitOrders2,
+	                        limitPrices2=limitPrices2))
+}
+initClStore  <- function(newRowList,series) {
+  clStore <- matrix(0,nrow=maxRows,ncol=length(series))
+  return(clStore)
+}
+updateClStore <- function(clStore, newRowList, series, iter) {
+  for (i in 1:length(series))
+    clStore[iter,i] <- as.numeric(newRowList[[series[i]]]$Close)
+  return(clStore)
+}
+initHighStore  <- function(newRowList,series) {
+  highStore <- matrix(0,nrow=maxRows,ncol=length(series))
+  return(highStore)
+}
+updateHighStore <- function(highStore, newRowList, series, iter) {
+  for (i in 1:length(series))
+    highStore[iter,i] <- as.numeric(newRowList[[series[i]]]$High)
+  return(highStore)
+}
+initLowStore  <- function(newRowList,series) {
+  lowStore <- matrix(0,nrow=maxRows,ncol=length(series))
+  return(lowStore)
+}
+updateLowStore <- function(lowStore, newRowList, series, iter) {
+  for (i in 1:length(series))
+    lowStore[iter,i] <- as.numeric(newRowList[[series[i]]]$Low)
+  return(lowStore)
+}
+initIndexStore  <- function(newRowList,series) {
+  indexStore <- matrix(0,nrow=maxRows,ncol=length(series))
+  return(indexStore)
+}
+updateIndexStore <- function(indexStore, newRowList, series, iter) {
+  for (i in 1:length(series))
+    indexStore[iter,i] <- as.character(index(newRowList[[series[i]]]))
+  return(indexStore)
+}
+###pos##
+initPosStore  <- function(newRowList,series) {
+  posStore <- matrix(0,nrow=maxRows,ncol=length(series))
+  return(posStore)
+}
+updatePosStore <- function(posStore, pos, series, iter) {
+  #print(pos)
+  posStore[iter,] <- pos
+  return(posStore)
+}
+#entryexit
+initEntryExitStore  <- function(newRowList,series) {
+  entryIterStore <- matrix(0,nrow=1,ncol=length(series))
+  return(entryIterStore)
+}
+updateEntryExitStore <- function(entryIterStore, poss2, series, iter) {
+  #  print(poss2)
+  #  print(entryIterStore)
+  for(i in 1:length(series)){
+    if((poss2[i]>0)&&(entryIterStore[1,i]>0)){
+      
+      entryIterStore[1,i] <- poss2[i]
+      
+    }else if(poss2[i]<0){
+      entryIterStore[1,i] <-0
+    }else{
+      entryIterStore[1,i] <- poss2[i]+entryIterStore[1,i]
+    }
+  }
+  #print(entryIterStore)
+  return(entryIterStore)
+  
+}
+initStore <- function(newRowList,series) {
+  return(list(iter=0,cl=initClStore(newRowList,series),
+              high=initHighStore(newRowList,series),
+              low=initLowStore(newRowList,series),
+              index=initIndexStore(newRowList,series),
+              ppooss=initPosStore(newRowList,series),
+              entryiter=initEntryExitStore(newRowList,series)))
+}
+updateStore <- function(store, newRowList, series,psos,entryAndExit) {
+  store$iter <- store$iter + 1
+  store$cl <- updateClStore(store$cl,newRowList,series,store$iter) 
+  store$high <- updateHighStore(store$high,newRowList,series,store$iter)
+  store$low <- updateLowStore(store$low,newRowList,series,store$iter)
+  store$index <- updateIndexStore(store$index,newRowList,series,store$iter)
+  store$ppooss<-updatePosStore(store$ppooss,psos,series,store$iter)
+  store$entryiter <- updateEntryExitStore(store$entryiter,entryAndExit,series,store$iter)
+  return(store)
+}
+###############################################################################
+# main strategy logic
+calculatePosSizes<-function(clStore,highStore,lowStore,column,iter){
+  startIndex <- iter - 55 - 1
+  
+  closeP<-clStore[startIndex:iter,column]
+  highP<-highStore[startIndex:iter,column]
+  lowP<-lowStore[startIndex:iter,column]
+  
+  priceHLC<-cbind(highP,lowP,closeP)
+  atrA <- ATR(priceHLC,n=14)
+  
+  #atr_ave1<-mean(atrA[15:1000,2])
+  lastAtr<-last(atrA[,"atr"])
+  posSizes<-round(10/lastAtr)
+  return(posSizes)
+}
+getTradeReturn <- function(prices,entry,exit,short=FALSE){
+  prices<-as.numeric(prices)
+  #  print(short)
+  # print(length(prices))
+  #  print(prices[exit])
+  #  print(prices[entry])
+  
+  if(short)
+    return(prices[entry]/prices[exit]-1)
+  else
+    return(prices[exit]/prices[entry]-1)
+}
+
+
+lgStFtlimitorder <-	function(clStore,highStore,lowStore,indexStore,column,iter,ppooss,entryAndExit) {
+ # print(entryAndExit)
+
+  startIndexS <- iter - params$lookbackS - 1
+  rsiS <- last(RSI(clStore[1:iter,column],n=params$lookbackS))
+  
+  priceSS<-clStore[,column]
+  
+  
+  orderr<<-rep(0,3)
+  posP<-ppooss[1:iter,column]
+  #print(posP)
+  #  print(posP[iter-1])
+  long<-orderr[1]<-ifelse(rsiS > (50 + params$threshold),1,0)
+  short<-orderr[2]<-ifelse(rsiS < (50 - params$threshold),-1,0)
+  poss<-long+short
+  if(entryAndExit[column]==0){
+    
+    
+    if(poss!=0){
+      orderr[3]<-iter
+      
+    }
+#    if(poss!=posP[iter-1]) entry<<-iter
+  } else if(entryAndExit[column]!=0){
+    
+    rett<-getTradeReturn(priceSS,entryAndExit[column],exit = iter,isTRUE(posP[entryAndExit[column]]<0))
+    #print(rett)
+    if ((rett > -0.5)&&(rett < 0.5 )) {
+      orderr[3]<- entryAndExit[column]
+      #poss<-posP[iter-1]
+      
+      if(posP[iter-1]<0){
+        orderr[2]<-poss
+      }else if(posP[iter-1]>0){
+        orderr[1]<-poss
+      }
+    }else{
+      orderr[1]<-0
+      orderr[2]<-0
+      orderr[3]<- -entryAndExit[column]
+      poss<-0
+    }
+    #else stopOuts[i]=1
+  }
+  #titStr <- paste("stoploss=", 0.01,":",sum(stopOuts),"stop outs")
+  # print(poss)
+  return(c(orderr,poss))
+}
+lgStFtrsi <-	function(clStore,column,iter) {
+  # decide if we should go long/short/flat (returning 1/-1/0)
+  startIndexS <- iter - params$lookbackS - 1
+  rsiS <- last(RSI(clStore[1:iter,column],n=params$lookbackS))
+  if ((rsiS > (50 + params$threshold))){
+      return(-1)
+    }else if ((rsiS < (50 - params$threshold))){
+      return(1)
+    }else{
+      return(0)
+    }
+}
